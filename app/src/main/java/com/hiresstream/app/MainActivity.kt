@@ -1,15 +1,18 @@
 package com.hiresstream.app
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.compose.animation.AnimatedVisibility
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -18,20 +21,24 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import coil.compose.AsyncImage
 import com.hiresstream.app.audio.AudioEngine
 import com.hiresstream.app.audio.RealtimeEnhancerAudioProcessor
 import com.hiresstream.app.data.SaavnRepository
 import com.hiresstream.app.data.Song
+import com.hiresstream.app.extension.ExtensionManager
+import com.hiresstream.app.extension.InstalledExtension
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.URL
 
 class MainActivity : ComponentActivity() {
     private lateinit var player: ExoPlayer
@@ -40,7 +47,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         player = ExoPlayer.Builder(this, audioEngine.renderersFactory(this)).build()
-        player.setAudioAttributes(androidx.media3.common.AudioAttributes.Builder().setUsage(androidx.media3.common.C.USAGE_MEDIA).setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
+        player.setAudioAttributes(
+            androidx.media3.common.AudioAttributes.Builder()
+                .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
+                .build(), true
+        )
         setContent { HiResTheme { HiResApp(player, audioEngine.processor) } }
     }
 
@@ -55,41 +67,63 @@ private fun HiResTheme(content: @Composable () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HiResApp(player: ExoPlayer, processor: RealtimeEnhancerAudioProcessor) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val repo = remember { SaavnRepository() }
+    val extensions = remember { ExtensionManager(context) }
     val scope = rememberCoroutineScope()
     var screen by remember { mutableStateOf("home") }
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Song>>(emptyList()) }
+    var homeSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
     var current by remember { mutableStateOf<Song?>(null) }
     var loading by remember { mutableStateOf(false) }
     var quality by remember { mutableStateOf(320) }
     var showPlayer by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val isPlaying = player.isPlaying
+    var installed by remember { mutableStateOf(extensions.installed()) }
 
-    fun selectStream(resolved: Song): String? =
-        if (quality == 320) resolved.stream320 ?: resolved.stream160 ?: resolved.stream96
-        else resolved.stream160 ?: resolved.stream96 ?: resolved.stream320
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            loading = true; error = null
+            val result = extensions.import(uri)
+            result.onSuccess {
+                installed = it
+                screen = "home"
+                homeSongs = emptyList()
+            }.onFailure { error = it.message ?: "Extension import failed" }
+            loading = false
+        }
+    }
+
+    fun addExtension() {
+        picker.launch(arrayOf("application/java-archive", "application/zip", "application/octet-stream", "*/*"))
+    }
+
+    LaunchedEffect(installed?.id) {
+        if (installed != null) {
+            loading = true; error = null
+            try { homeSongs = repo.homeSongs() }
+            catch (t: Throwable) { error = t.message ?: "Home feed failed" }
+            finally { loading = false }
+        } else homeSongs = emptyList()
+    }
+
+    fun selectStream(resolved: Song): String? = if (quality == 320) {
+        resolved.stream320 ?: resolved.stream160 ?: resolved.stream96 ?: resolved.stream48
+    } else {
+        resolved.stream160 ?: resolved.stream96 ?: resolved.stream48 ?: resolved.stream320
+    }
 
     fun startPlayback(resolved: Song, positionMs: Long = 0L, autoPlay: Boolean = true) {
         val url = selectStream(resolved)
-        if (url.isNullOrBlank()) {
-            error = "No playable $quality kbps stream was returned."
-            return
-        }
+        if (url.isNullOrBlank()) { error = "No playable stream was returned by the extension."; return }
         current = resolved
         player.setMediaItem(
-            MediaItem.Builder()
-                .setUri(url)
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(resolved.title)
-                        .setArtist(resolved.artist)
-                        .setArtworkUri(android.net.Uri.parse(resolved.image))
-                        .build()
-                )
-                .build(),
-            positionMs
+            MediaItem.Builder().setUri(url).setMediaMetadata(
+                MediaMetadata.Builder().setTitle(resolved.title).setArtist(resolved.artist)
+                    .setArtworkUri(android.net.Uri.parse(resolved.image)).build()
+            ).build(), positionMs
         )
         player.prepare()
         if (autoPlay) player.play()
@@ -99,36 +133,23 @@ private fun HiResApp(player: ExoPlayer, processor: RealtimeEnhancerAudioProcesso
     fun play(song: Song) {
         scope.launch {
             loading = true; error = null
-            try {
-                val resolved = repo.resolveStream(song)
-                startPlayback(resolved)
-            } catch (t: Throwable) {
-                error = t.message ?: "Playback failed"
-            } finally {
-                loading = false
-            }
+            try { startPlayback(repo.resolveStream(song)) }
+            catch (t: Throwable) { error = t.message ?: "Playback failed" }
+            finally { loading = false }
         }
     }
 
     LaunchedEffect(quality) {
-        processor.profile = if (quality == 320) RealtimeEnhancerAudioProcessor.Profile.P320
-        else RealtimeEnhancerAudioProcessor.Profile.P128
-
-        // Quality adjustment is live: change the source stream as well as DSP parameters.
+        processor.profile = if (quality == 320) RealtimeEnhancerAudioProcessor.Profile.P320 else RealtimeEnhancerAudioProcessor.Profile.P128
         val active = current
         if (active != null && player.currentMediaItem != null) {
-            val position = player.currentPosition
-            val wasPlaying = player.isPlaying
-            try {
-                startPlayback(active, position, wasPlaying)
-            } catch (_: Throwable) {
-                // Keep the existing stream if the alternate quality cannot be resolved.
-            }
+            val position = player.currentPosition; val wasPlaying = player.isPlaying
+            runCatching { startPlayback(repo.resolveStream(active), position, wasPlaying) }
         }
     }
 
     if (showPlayer && current != null) {
-        FullPlayer(current!!, player, quality, onClose = { showPlayer = false })
+        FullPlayer(current!!, player, quality) { showPlayer = false }
         return
     }
 
@@ -149,10 +170,19 @@ private fun HiResApp(player: ExoPlayer, processor: RealtimeEnhancerAudioProcesso
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
             when (screen) {
-                "home" -> Home(current, isPlaying) { current?.let { showPlayer = true } }
-                "search" -> SearchScreen(query, results, loading, error, { query = it }, {
-                    scope.launch { if (query.isNotBlank()) { loading = true; error = null; try { results = repo.searchSongs(query) } catch (t: Throwable) { error = t.message } finally { loading = false } } }
-                }, ::play)
+                "home" -> Home(installed, homeSongs, current, player.isPlaying, loading, error, ::addExtension) { play(it) }
+                "search" -> SearchScreen(installed, query, results, loading, error, { query = it }, {
+                    if (installed == null) {
+                        error = "Add the Saavn extension first."
+                    } else if (query.isNotBlank()) {
+                        scope.launch {
+                            loading = true; error = null
+                            try { results = repo.searchSongs(query) }
+                            catch (t: Throwable) { error = t.message ?: "Search failed" }
+                            finally { loading = false }
+                        }
+                    }
+                }, ::addExtension, ::play)
                 "settings" -> SettingsScreen(quality) { quality = it }
             }
         }
@@ -160,43 +190,81 @@ private fun HiResApp(player: ExoPlayer, processor: RealtimeEnhancerAudioProcesso
 }
 
 @Composable
-private fun Home(song: Song?, playing: Boolean, open: () -> Unit) {
-    Column(Modifier.fillMaxSize().padding(24.dp)) {
+private fun Home(
+    extension: InstalledExtension?, songs: List<Song>, current: Song?, playing: Boolean,
+    loading: Boolean, error: String?, addExtension: () -> Unit, play: (Song) -> Unit
+) {
+    Column(Modifier.fillMaxSize().padding(18.dp)) {
         Text("Your music, processed in real time.", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
-        Text("Transparent restoration with a 24-bit / 192 kHz output target.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(28.dp))
-        AssistChip(onClick = {}, label = { Text("Real-time enhancement") }, leadingIcon = { Icon(Icons.Default.GraphicEq, null) })
-        Spacer(Modifier.height(24.dp))
-        if (song != null) {
-            Card(Modifier.fillMaxWidth().clickable { open() }, shape = RoundedCornerShape(28.dp)) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    AsyncImage(song.image, null, Modifier.size(64.dp).clip(RoundedCornerShape(18.dp)), contentScale = ContentScale.Crop)
-                    Spacer(Modifier.width(14.dp)); Column(Modifier.weight(1f)) { Text(song.title, fontWeight = FontWeight.SemiBold); Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    Icon(if (playing) Icons.Default.PauseCircle else Icons.Default.PlayCircle, null, Modifier.size(38.dp))
+        Spacer(Modifier.height(6.dp))
+        Text("Conservative real-time enhancement. Lossy sources are not magically converted into the original master.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(16.dp))
+        if (extension == null) {
+            Card(shape = RoundedCornerShape(28.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(22.dp)) {
+                    Text("Add a music extension", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    Text("Download the Echo Saavn extension JAR and add it here. Once activated, Home, Search and playback use the provider.")
+                    Spacer(Modifier.height(14.dp))
+                    Button(addExtension) { Icon(Icons.Default.Extension, null); Spacer(Modifier.width(8.dp)); Text("Add Extension") }
                 }
             }
-        } else {
-            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp)) { Column(Modifier.padding(24.dp)) { Text("Start listening", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold); Spacer(Modifier.height(6.dp)); Text("Open Search and find a song from Saavn.") } }
+            return
+        }
+        AssistChip(onClick = {}, label = { Text("${extension.name} • ${extension.versionName}") }, leadingIcon = { Icon(Icons.Default.Extension, null) })
+        Spacer(Modifier.height(14.dp))
+        if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (error != null) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 10.dp))
+        if (songs.isEmpty() && !loading) {
+            Card(shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(20.dp)) {
+                    Text("No Home tracks returned", fontWeight = FontWeight.Bold)
+                    Text("Try Search, or re-add the extension if its provider package is outdated.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 10.dp)) {
+            items(songs, key = { it.id }) { song -> SongRow(song, if (current?.id == song.id && playing) "Playing" else "", play) }
         }
     }
 }
 
 @Composable
-private fun SearchScreen(query: String, results: List<Song>, loading: Boolean, error: String?, onQuery: (String) -> Unit, search: () -> Unit, play: (Song) -> Unit) {
+private fun SearchScreen(
+    extension: InstalledExtension?, query: String, results: List<Song>, loading: Boolean, error: String?,
+    onQuery: (String) -> Unit, search: () -> Unit, addExtension: () -> Unit, play: (Song) -> Unit
+) {
     Column(Modifier.fillMaxSize().padding(18.dp)) {
+        if (extension == null) {
+            Card(shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(20.dp)) {
+                    Text("Music provider not installed", fontWeight = FontWeight.Bold)
+                    Text("Add the downloaded Saavn extension to enable Search and playback.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(12.dp)); Button(addExtension) { Icon(Icons.Default.Extension, null); Spacer(Modifier.width(8.dp)); Text("Add Extension") }
+                }
+            }
+            return
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(query, onQuery, Modifier.weight(1f), singleLine = true, label = { Text("Search songs") }, leadingIcon = { Icon(Icons.Default.Search, null) }, shape = RoundedCornerShape(18.dp))
             Spacer(Modifier.width(8.dp)); FilledIconButton(onClick = search) { Icon(Icons.Default.ArrowForward, "Search") }
         }
-        if (loading) { Spacer(Modifier.height(18.dp)); LinearProgressIndicator(Modifier.fillMaxWidth()) }
-        if (error != null) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp))
+        if (loading) { Spacer(Modifier.height(14.dp)); LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        if (error != null) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(10.dp))
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(results, key = { it.id }) { song ->
-                ListItem(headlineContent = { Text(song.title, fontWeight = FontWeight.SemiBold) }, supportingContent = { Text(song.artist) }, leadingContent = { AsyncImage(song.image, null, Modifier.size(58.dp).clip(RoundedCornerShape(14.dp)), contentScale = ContentScale.Crop) }, trailingContent = { IconButton({ play(song) }) { Icon(Icons.Default.PlayArrow, "Play") } })
-            }
+            items(results, key = { it.id }) { song -> SongRow(song, "", play) }
         }
     }
+}
+
+@Composable
+private fun SongRow(song: Song, badge: String, play: (Song) -> Unit) {
+    ListItem(
+        headlineContent = { Text(song.title, fontWeight = FontWeight.SemiBold) },
+        supportingContent = { Text(if (badge.isBlank()) song.artist else "${song.artist} • $badge") },
+        leadingContent = { NetworkImage(song.image, Modifier.size(58.dp).clip(RoundedCornerShape(14.dp))) },
+        trailingContent = { IconButton({ play(song) }) { Icon(Icons.Default.PlayArrow, "Play") } }
+    )
 }
 
 @Composable
@@ -207,28 +275,56 @@ private fun SettingsScreen(quality: Int, onQuality: (Int) -> Unit) {
         Card(shape = RoundedCornerShape(28.dp)) {
             Column(Modifier.padding(20.dp)) {
                 Text("Quality adjustment", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Text("This changes the real-time processing profile.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Changes the selected source quality and the real-time processing profile.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
-                listOf(128, 320).forEach { q -> Row(Modifier.fillMaxWidth().clickable { onQuality(q) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) { RadioButton(quality == q, { onQuality(q) }); Spacer(Modifier.width(8.dp)); Text("$q kbps profile") } }
+                listOf(128, 320).forEach { q ->
+                    Row(Modifier.fillMaxWidth().clickable { onQuality(q) }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(quality == q, { onQuality(q) }); Spacer(Modifier.width(8.dp)); Text("$q kbps profile")
+                    }
+                }
             }
         }
-        Spacer(Modifier.height(18.dp)); AssistChip(onClick = {}, label = { Text("Output target • 24-bit / 192 kHz") }, leadingIcon = { Icon(Icons.Default.HighQuality, null) })
     }
 }
 
 @Composable
 private fun FullPlayer(song: Song, player: ExoPlayer, quality: Int, onClose: () -> Unit) {
     var playing by remember { mutableStateOf(player.isPlaying) }
-    DisposableEffect(player) { val listener = object : Player.Listener { override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying } }; player.addListener(listener); onDispose { player.removeListener(listener) } }
+    DisposableEffect(player) {
+        val listener = object : Player.Listener { override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying } }
+        player.addListener(listener); onDispose { player.removeListener(listener) }
+    }
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { IconButton(onClose) { Icon(Icons.Default.KeyboardArrowDown, "Close") }; Text("24-bit / 192 kHz", fontWeight = FontWeight.Bold); IconButton({}) { Icon(Icons.Default.MoreVert, null) } }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClose) { Icon(Icons.Default.KeyboardArrowDown, "Close") }
+                Text("Hi-Res", fontWeight = FontWeight.Bold)
+                IconButton({}) { Icon(Icons.Default.MoreVert, null) }
+            }
             Spacer(Modifier.height(22.dp))
-            AsyncImage(song.image, null, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(34.dp)), contentScale = ContentScale.Crop)
+            NetworkImage(song.image, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(34.dp)))
             Spacer(Modifier.height(22.dp)); Text(song.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(22.dp)); LinearProgressIndicator(progress = { if (player.duration > 0) player.currentPosition.toFloat() / player.duration else 0f }, modifier = Modifier.fillMaxWidth())
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) { IconButton({ player.seekToPrevious() }) { Icon(Icons.Default.SkipPrevious, null) }; FilledIconButton({ if (player.isPlaying) player.pause() else player.play() }, Modifier.size(72.dp)) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, null, Modifier.size(36.dp)) }; IconButton({ player.seekToNext() }) { Icon(Icons.Default.SkipNext, null) } }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                IconButton({ player.seekToPrevious() }) { Icon(Icons.Default.SkipPrevious, null) }
+                FilledIconButton({ if (player.isPlaying) player.pause() else player.play() }, Modifier.size(72.dp)) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, null, Modifier.size(36.dp)) }
+                IconButton({ player.seekToNext() }) { Icon(Icons.Default.SkipNext, null) }
+            }
             AssistChip(onClick = {}, label = { Text("Enhancement profile • $quality kbps") }, leadingIcon = { Icon(Icons.Default.AutoAwesome, null) })
         }
+    }
+}
+
+@Composable
+private fun NetworkImage(url: String, modifier: Modifier = Modifier) {
+    var bitmap by remember(url) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(url) {
+        bitmap = if (url.isBlank()) null else withContext(Dispatchers.IO) {
+            runCatching { URL(url).openStream().use { BitmapFactory.decodeStream(it) } }.getOrNull()
+        }
+    }
+    Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+        bitmap?.let { Image(it.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+            ?: Icon(Icons.Default.MusicNote, null, Modifier.size(34.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

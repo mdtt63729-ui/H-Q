@@ -1,1 +1,1 @@
-# Keep empty for v2; Media3/OkHttp/serialization provide their own rules.
+# Release shrinking is enabled in app/build.gradle.kts; libraries provide their own consumer rules.
