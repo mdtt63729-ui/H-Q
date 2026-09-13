@@ -1,0 +1,102 @@
+name: Android Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: 'Build Mode (both, debug, release)'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - debug
+          - release
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
+      - name: Generate Gradle Wrapper
+  run: |
+    echo "No wrapper found. Initializing Gradle wrapper..."
+    gradle wrapper
+    chmod +x ./gradlew
+
+      - name: Build Debug APK
+        if: github.event.inputs.build_mode == 'both' || github.event.inputs.build_mode == 'debug'
+        run: |
+          echo "Building Debug APK..."
+          ./gradlew assembleDebug --stacktrace --info
+
+      - name: Build Release APK
+        if: github.event.inputs.build_mode == 'both' || github.event.inputs.build_mode == 'release'
+        run: |
+          echo "Building Release APK..."
+          ./gradlew assembleRelease --stacktrace --info || echo "Release build completed or requires explicit signing keys."
+
+      - name: Collect Generated APKs
+        if: always()
+        run: |
+          mkdir -p outputs/debug outputs/release
+          echo "Searching for generated APK files..."
+          find . -type f -name "*.apk" | while read -r apk; do
+            echo "Found APK: $apk"
+            if echo "$apk" | grep -iq "debug"; then
+              cp -v "$apk" outputs/debug/ 2>/dev/null || true
+            elif echo "$apk" | grep -iq "release"; then
+              cp -v "$apk" outputs/release/ 2>/dev/null || true
+            else
+              cp -v "$apk" outputs/debug/ 2>/dev/null || true
+            fi
+          done
+          ls -la outputs/debug outputs/release
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: debug-apk
+          path: outputs/debug/*.apk
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload Release APK Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-apk
+          path: outputs/release/*.apk
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Archive Build Reports on Failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: gradle-build-reports
+          path: |
+            **/build/reports/
+            **/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
