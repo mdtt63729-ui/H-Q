@@ -21,9 +21,12 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.exoplayer.DecoderReuseEvaluation
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.ExoPlayer
 import com.hiresstream.app.audio.AudioEngine
 import com.hiresstream.app.audio.RealtimeEnhancerAudioProcessor
@@ -34,6 +37,7 @@ import com.hiresstream.app.data.OfflineSong
 import com.hiresstream.app.extension.ExtensionManager
 import com.hiresstream.app.extension.InstalledExtension
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URL
@@ -51,7 +55,7 @@ class MainActivity : ComponentActivity() {
         upgradedPlayer = ExoPlayer.Builder(this, audioEngine.renderersFactory(this)).build()
         configurePlayer(originalPlayer)
         originalPlayer.addAnalyticsListener(object : AnalyticsListener {
-            override fun onAudioInputFormatChanged(eventTime: AnalyticsListener.EventTime, format: Format, decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?) {
+            override fun onAudioInputFormatChanged(eventTime: AnalyticsListener.EventTime, format: Format, decoderReuseEvaluation: DecoderReuseEvaluation?) {
                 originalAudioStats.value = SourceAudioStats(format.sampleRate, format.channelCount, format.bitrate.takeIf { it > 0 })
             }
         })
