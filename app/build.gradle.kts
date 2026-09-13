@@ -10,10 +10,10 @@ android {
 
     defaultConfig {
         applicationId = "com.hiresstream.app"
-        minSdk = 26
+        minSdk = 31
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 4
+        versionName = "4.0"
     }
 
     splits {

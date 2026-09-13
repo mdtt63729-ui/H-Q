@@ -1,20 +1,22 @@
 package com.hiresstream.app.extension
 
 import android.content.Context
-import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.TimeUnit
 import java.util.jar.JarFile
 
 /**
- * Lightweight extension installer.
+ * Automatic Saavn provider bootstrap.
  *
- * Echo extensions are JVM shadow JARs. Android does not execute arbitrary JVM
- * extension bytecode directly. We therefore use the downloaded extension as
- * the provider declaration/activation package and run a small native Android
- * adapter for supported extension ids. This keeps the APK small and avoids a
- * JVM/D8 runtime inside the app.
+ * The official Echo Saavn release is an .eapk package. Hi-Res Stream does not
+ * execute arbitrary Echo/JVM extension bytecode; the package is downloaded,
+ * stored and activated as the provider declaration while the app's small
+ * native Saavn adapter handles Android playback.
  */
 data class InstalledExtension(
     val id: String,
@@ -27,6 +29,10 @@ data class InstalledExtension(
 class ExtensionManager(private val context: Context) {
     private val prefs = context.getSharedPreferences("extensions", Context.MODE_PRIVATE)
     private val dir = File(context.filesDir, "extensions").apply { mkdirs() }
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .build()
 
     fun installed(): InstalledExtension? = prefs.getString(KEY_ID, null)?.let {
         InstalledExtension(
@@ -40,40 +46,68 @@ class ExtensionManager(private val context: Context) {
 
     fun isSupported(id: String): Boolean = id == SUPPORTED_SAAVN_ID
 
-    suspend fun import(uri: Uri): Result<InstalledExtension> = withContext(Dispatchers.IO) {
+    /** Downloads and activates the latest Saavn extension release automatically. */
+    suspend fun ensureLatestSaavn(): Result<InstalledExtension> = withContext(Dispatchers.IO) {
         runCatching {
-            val temp = File(dir, "incoming-${System.currentTimeMillis()}.jar")
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                temp.outputStream().use { output -> input.copyTo(output) }
-            } ?: error("Unable to read extension file")
+            val root = JSONObject(get(LATEST_RELEASE_URL))
+            val tag = root.optString("tag_name").trim().ifBlank { error("Saavn release has no version") }
+            val asset = root.optJSONArray("assets")?.let { assets ->
+                (0 until assets.length())
+                    .mapNotNull { assets.optJSONObject(it) }
+                    .firstOrNull { it.optString("name").endsWith(".eapk", ignoreCase = true) }
+            } ?: error("Saavn release has no .eapk asset")
+            val downloadUrl = asset.optString("browser_download_url").trim()
+            if (downloadUrl.isBlank()) error("Saavn extension download URL is missing")
+            val fileName = asset.optString("name").trim().ifBlank { "saavn-$tag.eapk" }
 
-            val metadata = readManifest(temp) ?: run {
-                temp.delete()
-                error("Not a valid Echo extension JAR")
-            }
-            if (!isSupported(metadata.id)) {
-                temp.delete()
-                error("Unsupported extension: ${metadata.id}")
-            }
+            val current = installed()
+            if (current?.versionName == tag && File(dir, current.fileName).exists()) return@runCatching current
 
-            dir.listFiles()?.filter { it != temp }?.forEach { it.delete() }
-            val finalFile = File(dir, "${metadata.id}.jar")
-            if (finalFile.exists()) finalFile.delete()
-            if (!temp.renameTo(finalFile)) {
-                temp.copyTo(finalFile, overwrite = true)
-                temp.delete()
-            }
+            val target = File(dir, "saavn-$tag.eapk")
+            download(downloadUrl, target)
 
+            // The .eapk is the provider package; its metadata is known from the
+            // official release and the native adapter implements saavn_music.
+            dir.listFiles()?.filter { it != target }?.forEach { it.delete() }
+            val active = InstalledExtension(
+                id = SUPPORTED_SAAVN_ID,
+                name = "Saavn",
+                versionName = tag,
+                versionCode = tag.removePrefix("v"),
+                fileName = target.name
+            )
             prefs.edit()
-                .putString(KEY_ID, metadata.id)
-                .putString(KEY_NAME, metadata.name)
-                .putString(KEY_VERSION_NAME, metadata.versionName)
-                .putString(KEY_VERSION_CODE, metadata.versionCode)
-                .putString(KEY_FILE, finalFile.name)
+                .putString(KEY_ID, active.id)
+                .putString(KEY_NAME, active.name)
+                .putString(KEY_VERSION_NAME, active.versionName)
+                .putString(KEY_VERSION_CODE, active.versionCode)
+                .putString(KEY_FILE, active.fileName)
                 .apply()
-
-            metadata.copy(fileName = finalFile.name)
+            active
         }
+    }
+
+    /** Kept for backwards compatibility with old installs. */
+    suspend fun importFile(file: File): Result<InstalledExtension> = withContext(Dispatchers.IO) {
+        runCatching {
+            val metadata = readManifest(file) ?: error("Not a valid Echo extension package")
+            if (!isSupported(metadata.id)) error("Unsupported extension: ${metadata.id}")
+            val finalFile = File(dir, file.name)
+            file.copyTo(finalFile, overwrite = true)
+            val active = metadata.copy(fileName = finalFile.name)
+            save(active)
+            active
+        }
+    }
+
+    private fun save(value: InstalledExtension) {
+        prefs.edit()
+            .putString(KEY_ID, value.id)
+            .putString(KEY_NAME, value.name)
+            .putString(KEY_VERSION_NAME, value.versionName)
+            .putString(KEY_VERSION_CODE, value.versionCode)
+            .putString(KEY_FILE, value.fileName)
+            .apply()
     }
 
     private fun readManifest(file: File): InstalledExtension? = try {
@@ -89,12 +123,39 @@ class ExtensionManager(private val context: Context) {
                 fileName = file.name
             )
         }
-    } catch (_: Exception) {
-        null
+    } catch (_: Exception) { null }
+
+    private fun get(url: String): String {
+        client.newCall(
+            Request.Builder().url(url)
+                .header("Accept", "application/vnd.github+json")
+                .header("User-Agent", "HiResStream")
+                .build()
+        ).execute().use { response ->
+            if (!response.isSuccessful) error("GitHub request failed: HTTP ${response.code}")
+            return response.body?.string() ?: error("GitHub returned an empty response")
+        }
+    }
+
+    private fun download(url: String, target: File) {
+        val temp = File(target.parentFile, "${target.name}.part")
+        if (temp.exists()) temp.delete()
+        client.newCall(Request.Builder().url(url).header("User-Agent", "HiResStream").build())
+            .execute().use { response ->
+                if (!response.isSuccessful) error("Extension download failed: HTTP ${response.code}")
+                val body = response.body ?: error("Extension download was empty")
+                body.byteStream().use { input -> temp.outputStream().use { output -> input.copyTo(output) } }
+            }
+        if (target.exists()) target.delete()
+        if (!temp.renameTo(target)) {
+            temp.copyTo(target, overwrite = true)
+            temp.delete()
+        }
     }
 
     companion object {
         const val SUPPORTED_SAAVN_ID = "saavn_music"
+        private const val LATEST_RELEASE_URL = "https://api.github.com/repos/Abhishek890/Echo-Saavn-Extension/releases/latest"
         private const val KEY_ID = "id"
         private const val KEY_NAME = "name"
         private const val KEY_VERSION_NAME = "versionName"

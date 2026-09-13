@@ -3,12 +3,14 @@
 A small Material 3 Android music player with real-time conservative audio enhancement.
 
 ## Extension-first provider
-The app does not bundle a large music-provider implementation. From Home/Search, use **Add Extension** and select the downloaded Echo Saavn extension JAR. The installer reads its Echo manifest, validates `Extension-Id=saavn_music`, stores the package, and activates the native Android Saavn adapter. This avoids shipping a JVM extension runtime in the APK.
+The app does not bundle a large music-provider implementation. On first launch the app automatically checks the supplied Echo Saavn GitHub release and downloads the latest `.eapk` package. It stores the package locally and activates the native Android Saavn adapter. This avoids shipping a JVM extension runtime in the APK.
 
 The adapter follows the provider contract used by the supplied Echo extension: Saavn search, home feed, song details and 320/160/96/48 kbps stream variants. The extension package itself is used as the activation/provider declaration; Android does not execute arbitrary Java 17 JVM bytecode from the JAR.
 
-## Quality Adjustment
-Settings contains only **Quality adjustment** with **128 kbps** and **320 kbps** profiles. The selected profile changes both the source stream selection and the real-time DSP profile. The provider exposes 320/160/96/48 variants, so the 128 profile uses the best available lower stream (normally 160/96) rather than falsely claiming a native 128 kbps source.
+## Automatic Hi-Res Upgrade
+There is no manual quality setting. Playback automatically selects the best source variant available for each track, measures the playback format, and sends the Upgraded path through a real-time 192 kHz reconstruction/resampling stage. On Android 12+, the enhanced engine emits 24-bit packed PCM to the audio sink.
+
+The full-screen player provides an **Original / Upgraded** A/B switch. Original keeps the provider stream untouched; Upgraded applies the real-time processing and shows the measured source details plus the 24-bit/192 kHz engine target. This does not turn lossy audio into the original studio master.
 
 ## Size optimization
 Release builds enable R8 code shrinking and resource shrinking, remove unused Media3 UI/session modules, replace Coil with a tiny platform image loader, and replace kotlinx serialization with Android's built-in JSON parser. This is intended to bring the unsigned release APK substantially below the previous size; the final size is measured by the GitHub artifact itself. Android recommends R8 and resource shrinking for smaller release apps.
