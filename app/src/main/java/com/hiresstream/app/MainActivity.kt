@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -81,7 +82,17 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun HiResTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = lightColorScheme(), typography = Typography(), content = content)
+    val colors = darkColorScheme(
+        primary = Color(0xFFB9A7FF),
+        onPrimary = Color(0xFF21163D),
+        secondary = Color(0xFF7DD3FC),
+        background = Color(0xFF08090D),
+        surface = Color(0xFF101218),
+        surfaceVariant = Color(0xFF191C25),
+        onSurface = Color(0xFFF5F5F7),
+        onSurfaceVariant = Color(0xFF9EA3B0)
+    )
+    MaterialTheme(colorScheme = colors, typography = Typography(), content = content)
 }
 
 private enum class PlaybackMode { ORIGINAL, UPGRADED }
@@ -181,11 +192,18 @@ private fun HiResApp(
 
     fun switchMode(mode: PlaybackMode) {
         if (mode == playbackMode) return
-        val from = activePlayer; val to = playerFor(mode)
-        val position = from.currentPosition.coerceAtLeast(0L); val wasPlaying = from.isPlaying
+        val from = activePlayer
+        val to = playerFor(mode)
+        val position = from.currentPosition.coerceAtLeast(0L)
+        val wasPlaying = from.isPlaying
         val item = from.currentMediaItem ?: currentSource?.let { MediaItem.fromUri(it) }
         if (item == null) { playbackMode = mode; return }
-        from.pause(); to.setMediaItem(item, position); to.prepare(); if (wasPlaying) to.play(); playbackMode = mode
+        from.pause()
+        to.stop()
+        to.setMediaItem(item, position)
+        to.prepare()
+        playbackMode = mode
+        if (wasPlaying) to.play()
     }
 
     if (showPlayer && current != null) {
@@ -223,7 +241,7 @@ private fun Home(
     Column(Modifier.fillMaxSize().padding(18.dp)) {
         Text("Your music, processed in real time.", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
-        Text("Conservative real-time enhancement. Lossy sources are not magically converted into the original master.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("100% local processing • no cloud enhancement. The source is decoded on-device, then resampled and processed locally at 192 kHz. This does not recreate detail that was absent from the source.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(16.dp))
         if (extension == null) {
             Card(shape = RoundedCornerShape(28.dp), modifier = Modifier.fillMaxWidth()) {
@@ -340,69 +358,130 @@ private fun FullPlayer(
     onClose: () -> Unit
 ) {
     var playing by remember { mutableStateOf(player.isPlaying) }
+    var position by remember { mutableLongStateOf(player.currentPosition.coerceAtLeast(0L)) }
+    var duration by remember { mutableLongStateOf(player.duration.coerceAtLeast(0L)) }
+
     DisposableEffect(player) {
-        val listener = object : Player.Listener { override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying } }
-        player.addListener(listener); onDispose { player.removeListener(listener) }
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                duration = player.duration.coerceAtLeast(0L)
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
     }
-    Surface(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClose) { Text("⌄") }; Text("Now Playing", fontWeight = FontWeight.Bold); IconButton({}) { Text("⋮") }
+    LaunchedEffect(player, playing) {
+        while (true) {
+            position = player.currentPosition.coerceAtLeast(0L)
+            duration = player.duration.coerceAtLeast(0L)
+            kotlinx.coroutines.delay(250)
+        }
+    }
+
+    val progress = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+    val accent = if (mode == PlaybackMode.UPGRADED) Color(0xFFB9A7FF) else Color(0xFF7DD3FC)
+
+    Box(Modifier.fillMaxSize().background(Color(0xFF08090D))) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = RoundedCornerShape(18.dp), color = Color(0xFF151821), modifier = Modifier.size(44.dp).clickable(onClick = onClose)) {
+                    Box(contentAlignment = Alignment.Center) { Text("⌄", style = MaterialTheme.typography.titleLarge) }
+                }
+                Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+                    Text("NOW PLAYING", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = accent)
+                    Text(if (mode == PlaybackMode.UPGRADED) "Local enhanced playback • on-device" else "Original playback", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Surface(shape = RoundedCornerShape(18.dp), color = Color(0xFF151821), modifier = Modifier.size(44.dp)) {
+                    Box(contentAlignment = Alignment.Center) { Text("⋯", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
             }
-            Spacer(Modifier.height(18.dp))
-            NetworkImage(song.image, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(32.dp)))
-            Spacer(Modifier.height(18.dp)); Text(song.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(18.dp))
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                ModeButton("Original", mode == PlaybackMode.ORIGINAL, { onMode(PlaybackMode.ORIGINAL) }, Modifier.weight(1f))
-                ModeButton("Upgraded", mode == PlaybackMode.UPGRADED, { onMode(PlaybackMode.UPGRADED) }, Modifier.weight(1f))
+
+            Spacer(Modifier.height(20.dp))
+            Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(30.dp))) {
+                NetworkImage(song.image, Modifier.fillMaxSize())
+                Box(Modifier.fillMaxSize().background(Color(0x33000000)))
+                Surface(shape = RoundedCornerShape(14.dp), color = Color(0xCC08090D), modifier = Modifier.align(Alignment.TopStart).padding(14.dp)) {
+                    Text(if (mode == PlaybackMode.UPGRADED) "UPGRADED" else "ORIGINAL", modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = accent)
+                }
             }
+
+            Spacer(Modifier.height(18.dp))
+            Text(song.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold, maxLines = 1)
+            Text(song.artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+
             Spacer(Modifier.height(16.dp))
-            LinearProgressIndicator(progress = { if (player.duration > 0) player.currentPosition.toFloat() / player.duration else 0f }, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                IconButton({ player.seekToPrevious() }) { Text("⏮") }
-                FilledIconButton({ if (player.isPlaying) player.pause() else player.play() }, Modifier.size(72.dp)) { Text(if (playing) "Ⅱ" else "▶", style = MaterialTheme.typography.headlineSmall) }
-                IconButton({ player.seekToNext() }) { Text("⏭") }
+            Surface(shape = RoundedCornerShape(20.dp), color = Color(0xFF151821), modifier = Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(4.dp)) {
+                    PlayerModeChip("Original", mode == PlaybackMode.ORIGINAL, Color(0xFF7DD3FC), { onMode(PlaybackMode.ORIGINAL) }, Modifier.weight(1f))
+                    PlayerModeChip("Upgraded", mode == PlaybackMode.UPGRADED, Color(0xFFB9A7FF), { onMode(PlaybackMode.UPGRADED) }, Modifier.weight(1f))
+                }
             }
-            Spacer(Modifier.weight(1f))
+
+            Spacer(Modifier.height(18.dp))
+            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(4.dp)), color = accent, trackColor = Color(0xFF272B35))
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(formatTime(position), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(formatTime(duration), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                IconButton({ player.seekToPrevious() }, Modifier.size(50.dp)) { Text("⏮", style = MaterialTheme.typography.titleLarge) }
+                IconButton({ player.seekBack() }, Modifier.size(50.dp)) { Text("↶", style = MaterialTheme.typography.titleLarge) }
+                Surface(shape = RoundedCornerShape(24.dp), color = accent, modifier = Modifier.size(68.dp).clickable { if (player.isPlaying) player.pause() else player.play() }) {
+                    Box(contentAlignment = Alignment.Center) { Text(if (playing) "Ⅱ" else "▶", style = MaterialTheme.typography.headlineSmall, color = Color(0xFF111117)) }
+                }
+                IconButton({ player.seekForward() }, Modifier.size(50.dp)) { Text("↷", style = MaterialTheme.typography.titleLarge) }
+                IconButton({ player.seekToNext() }, Modifier.size(50.dp)) { Text("⏭", style = MaterialTheme.typography.titleLarge) }
+            }
+
+            Spacer(Modifier.height(14.dp))
             QualityComparison(sourceQuality, mode, stats, sourceStats)
         }
     }
 }
 
 @Composable
-private fun ModeButton(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(modifier = modifier.clickable(onClick = onClick), shape = RoundedCornerShape(14.dp), color = if (selected) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.surfaceVariant) {
-        Box(Modifier.padding(vertical = 11.dp), contentAlignment = Alignment.Center) { Text(label, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal) }
+private fun PlayerModeChip(label: String, selected: Boolean, accent: Color, onClick: () -> Unit, modifier: Modifier) {
+    Surface(modifier = modifier.height(44.dp).clickable(onClick = onClick), shape = RoundedCornerShape(16.dp), color = if (selected) accent else Color.Transparent) {
+        Box(contentAlignment = Alignment.Center) { Text(label, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, color = if (selected) Color(0xFF101116) else MaterialTheme.colorScheme.onSurfaceVariant) }
     }
+}
+
+private fun formatTime(ms: Long): String {
+    val total = (ms / 1000).coerceAtLeast(0L)
+    return "%d:%02d".format(total / 60, total % 60)
 }
 
 @Composable
 private fun QualityComparison(sourceQuality: Int, mode: PlaybackMode, stats: RealtimeEnhancerAudioProcessor.AudioStats, sourceStats: SourceAudioStats) {
-    val originalLabel = sourceStats.bitrate?.let { "${it / 1000} kbps • format reported" } ?: if (sourceQuality > 0) "$sourceQuality kbps source" else "Source bitrate detected"
-    val sourceRate = if (sourceStats.sampleRate > 0) "${sourceStats.sampleRate / 1000f} kHz" else "Rate detected on playback"
+    val originalLabel = sourceStats.bitrate?.let { "${it / 1000} kbps • measured" } ?: if (sourceQuality > 0) "$sourceQuality kbps • provider stream" else "Bitrate detected during playback"
+    val sourceRate = if (sourceStats.sampleRate > 0) "${sourceStats.sampleRate / 1000f} kHz" else "sample rate detected"
     val sourceChannels = if (sourceStats.channels > 0) "${sourceStats.channels} ch" else "channels detected"
     val inputRate = if (stats.inputSampleRate > 0) "${stats.inputSampleRate / 1000f} kHz" else sourceRate
-    val inputBits = if (stats.inputBits > 0) "${stats.inputBits}-bit decoded PCM" else sourceChannels
-    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp)) {
-        Column(Modifier.padding(16.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Column(Modifier.weight(1f)) {
-                    Text("ORIGINAL", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                    Text(originalLabel, style = MaterialTheme.typography.titleMedium)
-                    Text("$sourceRate • $inputBits", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text("→", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(horizontal = 8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("UPGRADED", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
-                    Text("24-bit / 192 kHz", style = MaterialTheme.typography.titleMedium)
-                    Text(if (mode == PlaybackMode.UPGRADED && stats.inputSampleRate > 0) "LIVE • active" else "Ready • tap Upgraded", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+    val inputBits = if (stats.inputBits > 0) "${stats.inputBits}-bit decoded" else "decoded PCM"
+    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(22.dp), color = Color(0xFF12151C)) {
+        Column(Modifier.padding(15.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                QualityPill("ORIGINAL", originalLabel, "$sourceRate • $sourceChannels", Color(0xFF7DD3FC), Modifier.weight(1f))
+                QualityPill("UPGRADED", "192 kHz engine", if (mode == PlaybackMode.UPGRADED && stats.inputSampleRate > 0) "$inputRate • $inputBits • live" else "192 kHz • ready", Color(0xFFB9A7FF), Modifier.weight(1f))
             }
             Spacer(Modifier.height(10.dp))
-            Text("Source format is read from playback metadata/decoded PCM. The upgraded path changes the playback format and DSP; it does not recreate missing studio-master information.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (stats.outputIsFloatFallback) Text("Packed 24-bit PCM is unavailable below Android 12, so this build uses 32-bit float at 192 kHz there.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            Text("Upgraded mode is processed entirely on this device: local decode → local resampling → local DSP → AudioTrack. No audio is sent to a cloud enhancement service.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun QualityPill(title: String, value: String, detail: String, accent: Color, modifier: Modifier) {
+    Surface(modifier, shape = RoundedCornerShape(17.dp), color = Color(0xFF191C25)) {
+        Column(Modifier.padding(12.dp)) {
+            Text(title, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = accent)
+            Spacer(Modifier.height(3.dp))
+            Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, maxLines = 2)
+            Text(detail, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
         }
     }
 }

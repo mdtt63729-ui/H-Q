@@ -12,8 +12,8 @@ android {
         applicationId = "com.hiresstream.app"
         minSdk = 31
         targetSdk = 35
-        versionCode = 5
-        versionName = "4.1"
+        versionCode = 7
+        versionName = "4.3"
     }
 
     splits {

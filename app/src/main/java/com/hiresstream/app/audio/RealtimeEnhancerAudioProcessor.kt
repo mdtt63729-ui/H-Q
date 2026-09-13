@@ -1,6 +1,5 @@
 package com.hiresstream.app.audio
 
-import android.os.Build
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import java.nio.ByteBuffer
@@ -11,15 +10,21 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.flow.MutableStateFlow
 
-/** Real-time reconstruction/resampling processor for the Upgraded playback path. */
+/**
+ * 100% on-device audio processor for the Upgraded playback path.
+ *
+ * No network, cloud API, remote DSP service, or upload is used here. Media3 supplies
+ * decoded PCM to this processor; resampling and enhancement happen entirely in the
+ * Android app process before the samples reach the AudioSink/AudioTrack.
+ */
 class RealtimeEnhancerAudioProcessor : AudioProcessor {
     data class AudioStats(
         val inputSampleRate: Int = 0,
         val inputChannels: Int = 0,
         val inputBits: Int = 0,
         val outputSampleRate: Int = 192_000,
-        val outputBits: Int = 24,
-        val outputIsFloatFallback: Boolean = Build.VERSION.SDK_INT < 31
+        val outputBits: Int = 32,
+        val outputIsFloat: Boolean = true
     )
 
     val stats = MutableStateFlow(AudioStats())
@@ -45,14 +50,18 @@ class RealtimeEnhancerAudioProcessor : AudioProcessor {
             inputAudioFormat.encoding != C.ENCODING_PCM_24BIT) {
             throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
         }
-        val outputEncoding = if (Build.VERSION.SDK_INT >= 31) C.ENCODING_PCM_24BIT else C.ENCODING_PCM_FLOAT
+        // The complete upgrade stays local. Float PCM is used for the engine output because
+        // Android devices/routes vary in packed 24-bit AudioTrack support. This keeps
+        // the local 192 kHz processing path broadly compatible and preserves full
+        // internal precision through the DSP/resampler.
+        val outputEncoding = C.ENCODING_PCM_FLOAT
         outputFormat = AudioProcessor.AudioFormat(192_000, channelCount, outputEncoding)
         stats.value = AudioStats(
             inputSampleRate = inputRate,
             inputChannels = channelCount,
             inputBits = bitsForEncoding(inputAudioFormat.encoding),
-            outputBits = if (outputEncoding == C.ENCODING_PCM_24BIT) 24 else 32,
-            outputIsFloatFallback = outputEncoding == C.ENCODING_PCM_FLOAT
+            outputBits = 32,
+            outputIsFloat = true
         )
         return outputFormat
     }

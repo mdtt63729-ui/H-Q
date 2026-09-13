@@ -20,3 +20,13 @@ The DSP is deterministic and conservative. A lossy source cannot be mathematical
 
 ## GitHub build
 The included GitHub Actions workflow builds only an **unsigned release APK** with `assembleRelease`.
+
+
+## Upgraded mode — fully local processing
+
+Upgraded mode is a local/on-device audio pipeline. The app does not send audio to a cloud enhancement API or remote DSP service. The network is used only to obtain the source stream/metadata when playing online (and for extension updates); Media3 decodes the stream locally, then `RealtimeEnhancerAudioProcessor` performs the resampling and DSP locally before output. Offline downloads use the same local processing path.
+
+Pipeline:
+`source stream/file → Media3 local decoder → local 192 kHz float resampler/DSP → AudioSink/AudioTrack`
+
+The 192 kHz figure is the engine target, not a guarantee that the phone's physical DAC/route runs at 192 kHz. Upgrading also cannot recreate information that was never present in a lossy source.

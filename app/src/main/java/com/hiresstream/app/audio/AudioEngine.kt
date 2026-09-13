@@ -6,6 +6,10 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 
+/**
+ * Local-only Hi-Res playback engine.
+ * The processor never performs network I/O; all enhancement is executed on-device.
+ */
 class AudioEngine {
     val processor = RealtimeEnhancerAudioProcessor()
 
