@@ -14,8 +14,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -157,14 +155,14 @@ private fun HiResApp(player: ExoPlayer, processor: RealtimeEnhancerAudioProcesso
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text("Hi-Res Stream", fontWeight = FontWeight.Bold) },
-                actions = { IconButton({ screen = "settings" }) { Icon(Icons.Default.Settings, "Settings") } }
+                actions = { IconButton({ screen = "settings" }) { Text("⚙", style = MaterialTheme.typography.titleLarge) } }
             )
         },
         bottomBar = {
             NavigationBar {
-                NavigationBarItem(screen == "home", { screen = "home" }, { Icon(Icons.Default.Home, null) }, label = { Text("Home") })
-                NavigationBarItem(screen == "search", { screen = "search" }, { Icon(Icons.Default.Search, null) }, label = { Text("Search") })
-                NavigationBarItem(screen == "settings", { screen = "settings" }, { Icon(Icons.Default.Settings, null) }, label = { Text("Settings") })
+                NavigationBarItem(screen == "home", { screen = "home" }, { Text("⌂") }, label = { Text("Home") })
+                NavigationBarItem(screen == "search", { screen = "search" }, { Text("⌕") }, label = { Text("Search") })
+                NavigationBarItem(screen == "settings", { screen = "settings" }, { Text("⚙") }, label = { Text("Settings") })
             }
         }
     ) { pad ->
@@ -206,12 +204,12 @@ private fun Home(
                     Spacer(Modifier.height(6.dp))
                     Text("Download the Echo Saavn extension JAR and add it here. Once activated, Home, Search and playback use the provider.")
                     Spacer(Modifier.height(14.dp))
-                    Button(addExtension) { Icon(Icons.Default.Extension, null); Spacer(Modifier.width(8.dp)); Text("Add Extension") }
+                    Button(addExtension) { Text("＋"); Spacer(Modifier.width(8.dp)); Text("Add Extension") }
                 }
             }
             return
         }
-        AssistChip(onClick = {}, label = { Text("${extension.name} • ${extension.versionName}") }, leadingIcon = { Icon(Icons.Default.Extension, null) })
+        AssistChip(onClick = {}, label = { Text("${extension.name} • ${extension.versionName}") }, leadingIcon = { Text("＋") })
         Spacer(Modifier.height(14.dp))
         if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (error != null) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 10.dp))
@@ -240,14 +238,14 @@ private fun SearchScreen(
                 Column(Modifier.padding(20.dp)) {
                     Text("Music provider not installed", fontWeight = FontWeight.Bold)
                     Text("Add the downloaded Saavn extension to enable Search and playback.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(12.dp)); Button(addExtension) { Icon(Icons.Default.Extension, null); Spacer(Modifier.width(8.dp)); Text("Add Extension") }
+                    Spacer(Modifier.height(12.dp)); Button(addExtension) { Text("＋"); Spacer(Modifier.width(8.dp)); Text("Add Extension") }
                 }
             }
             return
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(query, onQuery, Modifier.weight(1f), singleLine = true, label = { Text("Search songs") }, leadingIcon = { Icon(Icons.Default.Search, null) }, shape = RoundedCornerShape(18.dp))
-            Spacer(Modifier.width(8.dp)); FilledIconButton(onClick = search) { Icon(Icons.Default.ArrowForward, "Search") }
+            OutlinedTextField(query, onQuery, Modifier.weight(1f), singleLine = true, label = { Text("Search songs") }, leadingIcon = { Text("⌕") }, shape = RoundedCornerShape(18.dp))
+            Spacer(Modifier.width(8.dp)); FilledIconButton(onClick = search) { Text("→") }
         }
         if (loading) { Spacer(Modifier.height(14.dp)); LinearProgressIndicator(Modifier.fillMaxWidth()) }
         if (error != null) Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(10.dp))
@@ -263,7 +261,7 @@ private fun SongRow(song: Song, badge: String, play: (Song) -> Unit) {
         headlineContent = { Text(song.title, fontWeight = FontWeight.SemiBold) },
         supportingContent = { Text(if (badge.isBlank()) song.artist else "${song.artist} • $badge") },
         leadingContent = { NetworkImage(song.image, Modifier.size(58.dp).clip(RoundedCornerShape(14.dp))) },
-        trailingContent = { IconButton({ play(song) }) { Icon(Icons.Default.PlayArrow, "Play") } }
+        trailingContent = { IconButton({ play(song) }) { Text("▶") } }
     )
 }
 
@@ -297,20 +295,20 @@ private fun FullPlayer(song: Song, player: ExoPlayer, quality: Int, onClose: () 
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClose) { Icon(Icons.Default.KeyboardArrowDown, "Close") }
+                IconButton(onClose) { Text("⌄") }
                 Text("Hi-Res", fontWeight = FontWeight.Bold)
-                IconButton({}) { Icon(Icons.Default.MoreVert, null) }
+                IconButton({}) { Text("⋮") }
             }
             Spacer(Modifier.height(22.dp))
             NetworkImage(song.image, Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(34.dp)))
             Spacer(Modifier.height(22.dp)); Text(song.title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(22.dp)); LinearProgressIndicator(progress = { if (player.duration > 0) player.currentPosition.toFloat() / player.duration else 0f }, modifier = Modifier.fillMaxWidth())
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                IconButton({ player.seekToPrevious() }) { Icon(Icons.Default.SkipPrevious, null) }
-                FilledIconButton({ if (player.isPlaying) player.pause() else player.play() }, Modifier.size(72.dp)) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, null, Modifier.size(36.dp)) }
-                IconButton({ player.seekToNext() }) { Icon(Icons.Default.SkipNext, null) }
+                IconButton({ player.seekToPrevious() }) { Text("⏮") }
+                FilledIconButton({ if (player.isPlaying) player.pause() else player.play() }, Modifier.size(72.dp)) { Text(if (playing) "Ⅱ" else "▶", style = MaterialTheme.typography.headlineSmall) }
+                IconButton({ player.seekToNext() }) { Text("⏭") }
             }
-            AssistChip(onClick = {}, label = { Text("Enhancement profile • $quality kbps") }, leadingIcon = { Icon(Icons.Default.AutoAwesome, null) })
+            AssistChip(onClick = {}, label = { Text("Enhancement profile • $quality kbps") }, leadingIcon = { Text("✦") })
         }
     }
 }
@@ -325,6 +323,6 @@ private fun NetworkImage(url: String, modifier: Modifier = Modifier) {
     }
     Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
         bitmap?.let { Image(it.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
-            ?: Icon(Icons.Default.MusicNote, null, Modifier.size(34.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            ?: Text("♪", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
