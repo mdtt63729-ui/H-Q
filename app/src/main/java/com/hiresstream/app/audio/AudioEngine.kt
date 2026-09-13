@@ -20,6 +20,7 @@ class AudioEngine {
             enableAudioTrackPlaybackParams: Boolean
         ): AudioSink = DefaultAudioSink.Builder(context)
             .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+            .setEnableFloatOutput(false)
             .setAudioProcessors(arrayOf<AudioProcessor>(processor))
             .build()
     }

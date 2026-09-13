@@ -30,3 +30,7 @@ Pipeline:
 `source stream/file → Media3 local decoder → local 192 kHz float resampler/DSP → AudioSink/AudioTrack`
 
 The 192 kHz figure is the engine target, not a guarantee that the phone's physical DAC/route runs at 192 kHz. Upgrading also cannot recreate information that was never present in a lossy source.
+
+
+## Upgraded playback compatibility
+The Upgraded path is fully local. To avoid device-specific failures from forced 192 kHz/float output, the local processor now uses a stable 48 kHz PCM16 device-facing path while retaining local decode, resampling and DSP enhancement.

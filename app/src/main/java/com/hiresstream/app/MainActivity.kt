@@ -241,7 +241,7 @@ private fun Home(
     Column(Modifier.fillMaxSize().padding(18.dp)) {
         Text("Your music, processed in real time.", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp))
-        Text("100% local processing • no cloud enhancement. The source is decoded on-device, then resampled and processed locally at 192 kHz. This does not recreate detail that was absent from the source.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("100% local processing • no cloud enhancement. The source is decoded on-device, resampled locally to a stable 48 kHz playback path, then enhanced before AudioTrack. This does not recreate detail that was absent from the source.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(16.dp))
         if (extension == null) {
             Card(shape = RoundedCornerShape(28.dp), modifier = Modifier.fillMaxWidth()) {
@@ -466,10 +466,10 @@ private fun QualityComparison(sourceQuality: Int, mode: PlaybackMode, stats: Rea
         Column(Modifier.padding(15.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 QualityPill("ORIGINAL", originalLabel, "$sourceRate • $sourceChannels", Color(0xFF7DD3FC), Modifier.weight(1f))
-                QualityPill("UPGRADED", "192 kHz engine", if (mode == PlaybackMode.UPGRADED && stats.inputSampleRate > 0) "$inputRate • $inputBits • live" else "192 kHz • ready", Color(0xFFB9A7FF), Modifier.weight(1f))
+                QualityPill("UPGRADED", "48 kHz local engine", if (mode == PlaybackMode.UPGRADED && stats.inputSampleRate > 0) "$inputRate • $inputBits → 48 kHz • live" else "48 kHz • local", Color(0xFFB9A7FF), Modifier.weight(1f))
             }
             Spacer(Modifier.height(10.dp))
-            Text("Upgraded mode is processed entirely on this device: local decode → local resampling → local DSP → AudioTrack. No audio is sent to a cloud enhancement service.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Upgraded mode is processed entirely on this device: local decode → local resampling → local DSP → PCM16 AudioTrack. No audio is sent to a cloud enhancement service.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

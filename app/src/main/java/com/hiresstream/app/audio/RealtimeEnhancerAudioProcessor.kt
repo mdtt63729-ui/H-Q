@@ -11,20 +11,20 @@ import kotlin.math.min
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
- * 100% on-device audio processor for the Upgraded playback path.
+ * Robust local-only enhancement processor for Upgraded playback.
  *
- * No network, cloud API, remote DSP service, or upload is used here. Media3 supplies
- * decoded PCM to this processor; resampling and enhancement happen entirely in the
- * Android app process before the samples reach the AudioSink/AudioTrack.
+ * The important compatibility rule is that the processor outputs standard PCM16 at 48 kHz.
+ * This avoids device/route-specific failures seen with forced 192 kHz float/packed-24 output,
+ * while the actual decode, resampling and DSP still happen entirely on the phone.
  */
 class RealtimeEnhancerAudioProcessor : AudioProcessor {
     data class AudioStats(
         val inputSampleRate: Int = 0,
         val inputChannels: Int = 0,
         val inputBits: Int = 0,
-        val outputSampleRate: Int = 192_000,
-        val outputBits: Int = 32,
-        val outputIsFloat: Boolean = true
+        val outputSampleRate: Int = 48_000,
+        val outputBits: Int = 16,
+        val outputIsFloat: Boolean = false
     )
 
     val stats = MutableStateFlow(AudioStats())
@@ -33,6 +33,7 @@ class RealtimeEnhancerAudioProcessor : AudioProcessor {
     private var outputBuffer = EMPTY_BUFFER
     private var channelCount = 0
     private var inputRate = 0
+    private val targetRate = 48_000
     private var sourceFrames = FloatArray(0)
     private var sourceFrameCount = 0
     private var sourcePosition = 0.0
@@ -50,18 +51,18 @@ class RealtimeEnhancerAudioProcessor : AudioProcessor {
             inputAudioFormat.encoding != C.ENCODING_PCM_24BIT) {
             throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
         }
-        // The complete upgrade stays local. Float PCM is used for the engine output because
-        // Android devices/routes vary in packed 24-bit AudioTrack support. This keeps
-        // the local 192 kHz processing path broadly compatible and preserves full
-        // internal precision through the DSP/resampler.
-        val outputEncoding = C.ENCODING_PCM_FLOAT
-        outputFormat = AudioProcessor.AudioFormat(192_000, channelCount, outputEncoding)
+
+        // 48 kHz PCM16 is intentionally used as the stable device-facing format. The entire
+        // enhancement remains local; Android's AudioTrack/route gets a format it can reliably
+        // play instead of a forced 192 kHz format that can fail on some devices.
+        outputFormat = AudioProcessor.AudioFormat(targetRate, channelCount, C.ENCODING_PCM_16BIT)
         stats.value = AudioStats(
             inputSampleRate = inputRate,
             inputChannels = channelCount,
             inputBits = bitsForEncoding(inputAudioFormat.encoding),
-            outputBits = 32,
-            outputIsFloat = true
+            outputSampleRate = targetRate,
+            outputBits = 16,
+            outputIsFloat = false
         )
         return outputFormat
     }
@@ -70,25 +71,13 @@ class RealtimeEnhancerAudioProcessor : AudioProcessor {
 
     override fun queueEndOfStream() {
         if (sourceFrameCount > 0) {
-            val step = inputRate.toDouble() / 192_000.0
-            val finalFrame = sourceFrameCount - 1.0
-            val estimatedFrames = max(1, floor(max(0.0, (finalFrame - sourcePosition) / step)).toInt() + 1)
-            val bytesPerFrame = channelCount * if (outputFormat.encoding == C.ENCODING_PCM_24BIT) 3 else 4
-            val out = ByteBuffer.allocateDirect(estimatedFrames * bytesPerFrame + bytesPerFrame).order(ByteOrder.LITTLE_ENDIAN)
-            while (sourcePosition <= finalFrame) {
-                emitInterpolatedFrame(sourcePosition, out)
-                sourcePosition += step
-            }
-            out.flip()
-            outputBuffer = out
-            sourceFrameCount = 0
-            sourcePosition = 0.0
-            sourceFrames = FloatArray(0)
+            produceAvailable(forceFinal = true)
         }
         ended = true
     }
 
     override fun getOutput(): ByteBuffer = outputBuffer.also { outputBuffer = EMPTY_BUFFER }
+
     override fun isEnded(): Boolean = ended && outputBuffer === EMPTY_BUFFER && sourceFrameCount == 0
 
     override fun flush() {
@@ -114,7 +103,7 @@ class RealtimeEnhancerAudioProcessor : AudioProcessor {
         inputBuffer.position(inputBuffer.limit())
         if (decoded.isEmpty()) return
         appendFrames(decoded)
-        produceAvailable()
+        produceAvailable(forceFinal = false)
     }
 
     private fun decodeToFloat(inputBuffer: ByteBuffer): FloatArray {
@@ -144,22 +133,31 @@ class RealtimeEnhancerAudioProcessor : AudioProcessor {
 
     private fun appendFrames(samples: FloatArray) {
         val required = sourceFrameCount * channelCount + samples.size
-        if (sourceFrames.size < required) sourceFrames = sourceFrames.copyOf(max(required, sourceFrames.size * 2 + channelCount * 64))
+        if (sourceFrames.size < required) {
+            sourceFrames = sourceFrames.copyOf(max(required, sourceFrames.size * 2 + channelCount * 256))
+        }
         samples.copyInto(sourceFrames, sourceFrameCount * channelCount)
         sourceFrameCount += samples.size / channelCount
     }
 
-    private fun produceAvailable() {
-        if (sourceFrameCount < 2) return
-        val step = inputRate.toDouble() / 192_000.0
+    private fun produceAvailable(forceFinal: Boolean) {
+        if (sourceFrameCount < if (forceFinal) 1 else 2) return
+
+        val step = inputRate.toDouble() / targetRate.toDouble()
         val maxPosition = sourceFrameCount - 1.0
-        val estimatedFrames = max(1, floor((maxPosition - sourcePosition) / step).toInt() + 1)
-        val bytesPerFrame = channelCount * if (outputFormat.encoding == C.ENCODING_PCM_24BIT) 3 else 4
-        val out = ByteBuffer.allocateDirect(estimatedFrames * bytesPerFrame + bytesPerFrame).order(ByteOrder.LITTLE_ENDIAN)
-        while (sourcePosition < maxPosition) {
+        val lastPosition = if (forceFinal) maxPosition else maxPosition - 1e-9
+        if (sourcePosition > lastPosition) return
+
+        val estimatedFrames = max(1, floor((lastPosition - sourcePosition) / step).toInt() + 1)
+        val bytesPerFrame = channelCount * 2
+        val out = ByteBuffer.allocateDirect(estimatedFrames * bytesPerFrame + bytesPerFrame)
+            .order(ByteOrder.LITTLE_ENDIAN)
+
+        while (sourcePosition <= lastPosition) {
             emitInterpolatedFrame(sourcePosition, out)
             sourcePosition += step
         }
+
         compactSourceBuffer()
         out.flip()
         outputBuffer = out
@@ -177,27 +175,28 @@ class RealtimeEnhancerAudioProcessor : AudioProcessor {
     }
 
     private fun writeSample(buffer: ByteBuffer, sample: Float) {
-        val v = (sample * 8_388_607f).toInt().coerceIn(-8_388_608, 8_388_607)
-        if (outputFormat.encoding == C.ENCODING_PCM_24BIT) {
-            buffer.put((v and 0xFF).toByte())
-            buffer.put(((v shr 8) and 0xFF).toByte())
-            buffer.put(((v shr 16) and 0xFF).toByte())
-        } else buffer.putFloat(sample)
+        val v = (sample * 32767f).toInt().coerceIn(-32768, 32767)
+        buffer.putShort(v.toShort())
     }
 
     private fun enhance(x0: Float, channel: Int): Float {
-        val prev = if (channel == 0) lastL else lastR
-        val hp = x0 - prev
-        val restored = (x0 - hp * 0.004f + hp * 0.018f).coerceIn(-1f, 1f)
-        if (channel == 0) lastL = x0 else lastR = x0
+        val prev = when {
+            channel == 0 -> lastL
+            channel == 1 -> lastR
+            else -> 0f
+        }
+        val delta = x0 - prev
+        // Very mild local presence/clarity shaping. It does not invent missing source detail.
+        val restored = (x0 + delta * 0.012f).coerceIn(-1f, 1f)
+        if (channel == 0) lastL = x0 else if (channel == 1) lastR = x0
         val ceiling = 0.992f
         return if (abs(restored) > ceiling) {
-            (ceiling + (abs(restored) - ceiling) * 0.18f) * if (restored < 0f) -1f else 1f
+            (ceiling + (abs(restored) - ceiling) * 0.12f) * if (restored < 0f) -1f else 1f
         } else restored
     }
 
     private fun compactSourceBuffer() {
-        val consumed = sourcePosition.toInt().coerceAtMost(sourceFrameCount - 1)
+        val consumed = sourcePosition.toInt().coerceAtMost(max(0, sourceFrameCount - 1))
         if (consumed <= 0) return
         val remainingFrames = sourceFrameCount - consumed
         sourceFrames.copyInto(sourceFrames, 0, consumed * channelCount, sourceFrameCount * channelCount)
@@ -212,5 +211,7 @@ class RealtimeEnhancerAudioProcessor : AudioProcessor {
         else -> 0
     }
 
-    companion object { private val EMPTY_BUFFER = ByteBuffer.allocateDirect(0).order(ByteOrder.nativeOrder()) }
+    companion object {
+        private val EMPTY_BUFFER = ByteBuffer.allocateDirect(0).order(ByteOrder.nativeOrder())
+    }
 }
