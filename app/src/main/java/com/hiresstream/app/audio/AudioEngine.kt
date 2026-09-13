@@ -15,13 +15,11 @@ class AudioEngine {
         override fun buildAudioSink(
             context: Context,
             enableFloatOutput: Boolean,
-            enableAudioTrackPlaybackParams: Boolean,
-            enableOffload: Boolean
+            enableAudioTrackPlaybackParams: Boolean
         ): AudioSink {
             return DefaultAudioSink.Builder(context)
                 .setEnableFloatOutput(true)
                 .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                .setOffloadMode(DefaultAudioSink.OFFLOAD_MODE_DISABLED)
                 .setAudioProcessors(arrayOf<AudioProcessor>(processor))
                 .build()
         }

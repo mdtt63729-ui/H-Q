@@ -52,6 +52,7 @@ private fun HiResTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = lightColorScheme(), typography = Typography(), content = content)
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HiResApp(player: ExoPlayer, processor: RealtimeEnhancerAudioProcessor) {
     val repo = remember { SaavnRepository() }
